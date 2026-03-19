@@ -1,10 +1,3 @@
-local function _table_unpack(values)
-    if table.unpack then
-        return table.unpack(values)
-    end
-    return unpack(values)
-end
-
 local function _append_unique(out, values)
     if not values then
         return
@@ -60,25 +53,6 @@ local function _normalize_ros_dep_args(...)
     return normalized, opts
 end
 
-local function _toolchain_guard(mode)
-    if mode == "off" then
-        return
-    end
-    local cc = get_config("cc") or ""
-    local cxx = get_config("cxx") or ""
-    local suspect = string.find(cc, "xlings", 1, true) or string.find(cxx, "xlings", 1, true)
-    if not suspect then
-        return
-    end
-    local msg = "add_ros_deps(): detected xlings toolchain/runtime; consider " ..
-        "set_toolset(\"cc\", \"/usr/bin/gcc\") and set_toolset(\"cxx\", \"/usr/bin/g++\")"
-    if mode == "error" then
-        print("error: " .. msg)
-        return
-    end
-    print("warning: " .. msg)
-end
-
 local function _find_pkg_prefix(pkg)
     local ament_prefix_path = os.getenv("AMENT_PREFIX_PATH") or ""
     for _, prefix in ipairs(path.splitenv(ament_prefix_path)) do
@@ -119,7 +93,11 @@ local function _resolve_from_index(pkg, visited, acc)
     end
 
     if prefix then
+        local inc_root = path.join(prefix, "include")
         local inc_pkg = path.join(prefix, "include", pkg)
+        if os.isdir(inc_root) then
+            _append_unique(acc.include_dirs, {inc_root})
+        end
         if os.isdir(inc_pkg) then
             _append_unique(acc.include_dirs, {inc_pkg})
         end
@@ -140,7 +118,6 @@ function add_ros_deps(...)
     if #packages == 0 then
         return
     end
-    _toolchain_guard(opts.toolchain_guard or "warn")
 
     if _AMENT_XMAKE_ROS_INDEX == nil then
         print("error: add_ros_deps(): ROS index not loaded. Build through colcon-xmake or ensure index prelude is included")
@@ -155,10 +132,10 @@ function add_ros_deps(...)
     }
     local ament_prefix_path = os.getenv("AMENT_PREFIX_PATH") or ""
     for _, prefix in ipairs(path.splitenv(ament_prefix_path)) do
-        local include_root = path.join(prefix, "include")
-        if os.isdir(include_root) then
-            _append_unique(acc.include_dirs, {include_root})
-            _append_unique(acc.include_dirs, os.dirs(path.join(include_root, "*")))
+        local inc_root = path.join(prefix, "include")
+        if os.isdir(inc_root) then
+            _append_unique(acc.include_dirs, {inc_root})
+            _append_unique(acc.include_dirs, os.dirs(path.join(inc_root, "*")))
         end
     end
     local visited = {}
