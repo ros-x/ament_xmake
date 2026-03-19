@@ -24,7 +24,8 @@ rule("ament_xmake.package")
             raise("installdir is not configured; run xmake f --installdir=<dir>")
         end
 
-        local pkgname = path.filename(os.projectdir())
+        local source_dir = os.getenv("AMENT_XMAKE_SOURCE_DIR") or os.projectdir()
+        local pkgname = path.filename(source_dir)
         local share_pkg_dir = path.join(installdir, "share", pkgname)
         local marker_dir = path.join(
             installdir, "share", "ament_index", "resource_index", "packages")
@@ -35,12 +36,12 @@ rule("ament_xmake.package")
             mkdir_p(pkg_state_dir)
             local include_dir = path.join(installdir, "include")
             mkdir_p(include_dir)
-            local project_include_dir = path.join(os.projectdir(), "include")
+            local project_include_dir = path.join(source_dir, "include")
             if os.isdir(project_include_dir) then
                 os.cp(path.join(project_include_dir, "*"), include_dir)
             end
 
-            local pkgxml = path.join(os.projectdir(), "package.xml")
+            local pkgxml = path.join(source_dir, "package.xml")
             mkdir_p(share_pkg_dir)
             if os.isfile(pkgxml) then
                 install_file(pkgxml, path.join(share_pkg_dir, "package.xml"))
