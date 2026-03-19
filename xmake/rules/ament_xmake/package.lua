@@ -176,6 +176,36 @@ function add_ros_deps(...)
     end
 end
 
+-- Register additional data directories for installation beyond the conventional ones.
+-- At parse time, we store entries via environment variable since io may not be available.
+-- The on_install handler reads these back.
+_AMENT_XMAKE_EXTRA_DATA = _AMENT_XMAKE_EXTRA_DATA or {}
+
+function install_ros_data(subdir, ...)
+    local files = {...}
+    if #files == 0 then
+        print("error: install_ros_data() expects at least one file pattern")
+        return
+    end
+    for _, pattern in ipairs(files) do
+        table.insert(_AMENT_XMAKE_EXTRA_DATA, {subdir = subdir, pattern = pattern})
+    end
+end
+
+-- Register plugin description XML files for installation.
+_AMENT_XMAKE_EXTRA_PLUGINS = _AMENT_XMAKE_EXTRA_PLUGINS or {}
+
+function install_ros_plugin(plugin_xml, base_class_pkg)
+    if not plugin_xml or not base_class_pkg then
+        print("error: install_ros_plugin() expects (plugin_xml_path, base_class_package)")
+        return
+    end
+    table.insert(_AMENT_XMAKE_EXTRA_PLUGINS, {
+        xml = plugin_xml,
+        base_class_pkg = base_class_pkg,
+    })
+end
+
 rule("ament_xmake.package")
     on_install(function (target)
         local function mkdir_p(dir)
@@ -228,6 +258,56 @@ rule("ament_xmake.package")
 
             mkdir_p(marker_dir)
             io.writefile(path.join(marker_dir, pkgname), "")
+
+            -- Install ROS data files (launch, config, etc.) from install_ros_data() calls
+            for _, entry in ipairs(_AMENT_XMAKE_EXTRA_DATA or {}) do
+                local matched = os.files(path.join(source_dir, entry.pattern))
+                for _, src_file in ipairs(matched) do
+                    local dst = path.join(share_pkg_dir, entry.subdir, path.filename(src_file))
+                    install_file(src_file, dst)
+                end
+            end
+
+            -- Auto-install conventional ROS data directories if they exist
+            local conventional_dirs = {"launch", "config", "urdf", "meshes", "maps", "worlds", "rviz", "params"}
+            for _, subdir in ipairs(conventional_dirs) do
+                local src_subdir = path.join(source_dir, subdir)
+                if os.isdir(src_subdir) then
+                    local files_in_dir = os.files(path.join(src_subdir, "*"))
+                    for _, src_file in ipairs(files_in_dir) do
+                        local dst = path.join(share_pkg_dir, subdir, path.filename(src_file))
+                        install_file(src_file, dst)
+                    end
+                end
+            end
+
+            -- Auto-detect and install plugin description XML files
+            -- Scan for XML files containing <library> (pluginlib pattern)
+            local plugin_xmls = os.files(path.join(source_dir, "*plugin*.xml"))
+            for _, src_xml in ipairs(plugin_xmls) do
+                local content = io.readfile(src_xml) or ""
+                if content:find("<library") then
+                    local dst_xml = path.join(share_pkg_dir, path.filename(src_xml))
+                    install_file(src_xml, dst_xml)
+                    -- Parse base_class_type to determine the index key
+                    -- Try to extract base_class_type from XML
+                    local base_pkg = content:match('base_class_type="([^"]+)"')
+                    if base_pkg then
+                        -- Extract package name from fully qualified type (e.g. rclcpp_components::NodeFactory)
+                        local idx_pkg = base_pkg:match("^([^:]+)")
+                        if idx_pkg then
+                            local pluginlib_index_dir = path.join(
+                                installdir, "share", "ament_index", "resource_index",
+                                idx_pkg .. "__pluginlib__plugin")
+                            mkdir_p(pluginlib_index_dir)
+                            io.writefile(
+                                path.join(pluginlib_index_dir, pkgname),
+                                "share/" .. pkgname .. "/" .. path.filename(src_xml) .. "\n")
+                        end
+                    end
+                end
+            end
+
             io.writefile(pkg_meta_done, "")
         end
 
@@ -246,48 +326,88 @@ rule("ament_xmake.package")
             end
         end
 
-        -- Generate CMake package config from the primary package library target
-        -- so downstream find_package(<pkg> CONFIG) can resolve and link
-        -- deterministically for multi-target projects.
+        -- Generate CMake package config from library targets
+        -- Each library target writes a cmake fragment; the top-level Config.cmake
+        -- includes all fragments so downstream find_package() works for multi-target packages.
         if kind == "binary" then
             return
         end
 
         local cmake_dir = path.join(installdir, "share", pkgname, "cmake")
         mkdir_p(cmake_dir)
-        local cfg = path.join(cmake_dir, pkgname .. "Config.cmake")
-        local should_emit = false
-        if target:name() == pkgname then
-            should_emit = true
-        elseif not os.isfile(cfg) then
-            -- fallback for global rule mode when no target matches pkg name
-            should_emit = true
-        end
-        if not should_emit then
-            return
+
+        -- Determine the cmake target name: use basename if set, otherwise target name
+        local lib_filename = path.filename(targetfile or "")
+        local cmake_target_name = target:name()
+        -- Extract the library name from filename (e.g. libfoo.so -> foo, libfoo.a -> foo)
+        if lib_filename ~= "" then
+            local base = lib_filename:match("^lib(.+)%.so") or lib_filename:match("^lib(.+)%.a")
+            if base then
+                cmake_target_name = base
+            end
         end
 
-        local static_lib = path.join(
-            installdir, "lib", "lib" .. target:name() .. ".a")
-        local shared_lib = path.join(
-            installdir, "lib", "lib" .. target:name() .. ".so")
+        local is_shared = kind == "shared"
+        local lib_type = is_shared and "SHARED" or "STATIC"
+
+        -- Write per-target cmake fragment
+        local fragment_name = cmake_target_name .. "-target.cmake"
+        local fragment_path = path.join(cmake_dir, fragment_name)
         local lines = {}
-        table.insert(lines, "set(" .. pkgname .. "_FOUND TRUE)")
-        table.insert(lines, "set(" .. pkgname .. "_INCLUDE_DIR \"" .. include_dir .. "\")")
-        table.insert(lines, "set(_" .. pkgname .. "_lib \"\")")
+        table.insert(lines, "# Auto-generated by ament_xmake for target: " .. cmake_target_name)
         if installed_lib_path then
-            table.insert(lines, "set(_" .. pkgname .. "_lib \"" .. installed_lib_path .. "\")")
+            table.insert(lines, "if(NOT TARGET " .. pkgname .. "::" .. cmake_target_name .. ")")
+            table.insert(lines, "  add_library(" .. pkgname .. "::" .. cmake_target_name .. " " .. lib_type .. " IMPORTED)")
+            table.insert(lines, "  set_target_properties(" .. pkgname .. "::" .. cmake_target_name .. " PROPERTIES")
+            table.insert(lines, "    IMPORTED_LOCATION \"" .. installed_lib_path .. "\"")
+            if is_shared then
+                table.insert(lines, "    IMPORTED_SONAME \"" .. lib_filename .. "\"")
+            end
+            table.insert(lines, "    INTERFACE_INCLUDE_DIRECTORIES \"" .. include_dir .. "\"")
+            table.insert(lines, "    INTERFACE_LINK_DIRECTORIES \"" .. path.join(installdir, "lib") .. "\")")
+            table.insert(lines, "endif()")
         end
-        table.insert(lines, "if(NOT _" .. pkgname .. "_lib AND EXISTS \"" .. shared_lib .. "\")")
-        table.insert(lines, "  set(_" .. pkgname .. "_lib \"" .. shared_lib .. "\")")
-        table.insert(lines, "elseif(NOT _" .. pkgname .. "_lib AND EXISTS \"" .. static_lib .. "\")")
-        table.insert(lines, "  set(_" .. pkgname .. "_lib \"" .. static_lib .. "\")")
-        table.insert(lines, "endif()")
-        table.insert(lines, "if(NOT TARGET " .. pkgname .. "::" .. pkgname .. " AND _" .. pkgname .. "_lib)")
-        table.insert(lines, "  add_library(" .. pkgname .. "::" .. pkgname .. " UNKNOWN IMPORTED)")
-        table.insert(lines, "  set_target_properties(" .. pkgname .. "::" .. pkgname .. " PROPERTIES")
-        table.insert(lines, "    IMPORTED_LOCATION \"${_" .. pkgname .. "_lib}\"")
-        table.insert(lines, "    INTERFACE_INCLUDE_DIRECTORIES \"" .. include_dir .. "\")")
-        table.insert(lines, "endif()")
-        io.writefile(cfg, table.concat(lines, "\n") .. "\n")
+        io.writefile(fragment_path, table.concat(lines, "\n") .. "\n")
+
+        -- Write or update top-level Config.cmake that includes all fragments
+        -- and provides the legacy variables
+        local cfg = path.join(cmake_dir, pkgname .. "Config.cmake")
+        local cfg_lines = {}
+        cfg_lines[1] = "# Auto-generated by ament_xmake"
+        cfg_lines[2] = "set(" .. pkgname .. "_FOUND TRUE)"
+        cfg_lines[3] = "set(" .. pkgname .. "_INCLUDE_DIRS \"" .. include_dir .. "\")"
+        cfg_lines[4] = "set(" .. pkgname .. "_LIBRARIES \"\")"
+        cfg_lines[5] = "set(" .. pkgname .. "_LIBRARY_DIRS \"" .. path.join(installdir, "lib") .. "\")"
+        cfg_lines[6] = ""
+        cfg_lines[7] = "# Include all target fragments"
+        cfg_lines[8] = "get_filename_component(_dir \"${CMAKE_CURRENT_LIST_FILE}\" PATH)"
+        cfg_lines[9] = "file(GLOB _fragments \"${_dir}/*-target.cmake\")"
+        cfg_lines[10] = "foreach(_f ${_fragments})"
+        cfg_lines[11] = "  include(${_f})"
+        cfg_lines[12] = "endforeach()"
+        cfg_lines[13] = "unset(_fragments)"
+        cfg_lines[14] = "unset(_dir)"
+        cfg_lines[15] = ""
+        -- Provide a default alias: <pkg>::<pkg> pointing to the primary library
+        -- Prefer shared library, fall back to static
+        cfg_lines[16] = "# Default alias target"
+        cfg_lines[17] = "if(NOT TARGET " .. pkgname .. "::" .. pkgname .. ")"
+        cfg_lines[18] = "  # Try to find the best matching target"
+        local shared_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".so")
+        local static_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".a")
+        cfg_lines[19] = "  if(EXISTS \"" .. shared_lib .. "\")"
+        cfg_lines[20] = "    add_library(" .. pkgname .. "::" .. pkgname .. " SHARED IMPORTED)"
+        cfg_lines[21] = "    set_target_properties(" .. pkgname .. "::" .. pkgname .. " PROPERTIES"
+        cfg_lines[22] = "      IMPORTED_LOCATION \"" .. shared_lib .. "\""
+        cfg_lines[23] = "      INTERFACE_INCLUDE_DIRECTORIES \"" .. include_dir .. "\""
+        cfg_lines[24] = "      INTERFACE_LINK_DIRECTORIES \"" .. path.join(installdir, "lib") .. "\")"
+        cfg_lines[25] = "  elseif(EXISTS \"" .. static_lib .. "\")"
+        cfg_lines[26] = "    add_library(" .. pkgname .. "::" .. pkgname .. " STATIC IMPORTED)"
+        cfg_lines[27] = "    set_target_properties(" .. pkgname .. "::" .. pkgname .. " PROPERTIES"
+        cfg_lines[28] = "      IMPORTED_LOCATION \"" .. static_lib .. "\""
+        cfg_lines[29] = "      INTERFACE_INCLUDE_DIRECTORIES \"" .. include_dir .. "\""
+        cfg_lines[30] = "      INTERFACE_LINK_DIRECTORIES \"" .. path.join(installdir, "lib") .. "\")"
+        cfg_lines[31] = "  endif()"
+        cfg_lines[32] = "endif()"
+        io.writefile(cfg, table.concat(cfg_lines, "\n") .. "\n")
     end)
