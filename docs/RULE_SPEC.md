@@ -2,6 +2,14 @@
 
 Rule name: `ament_xmake.package`
 
+## Usage modes
+
+Both are supported:
+- global mode: `add_rules("ament_xmake.package")` at file scope
+- target mode: `add_rules("ament_xmake.package")` inside target block
+
+Implementation uses idempotent package-level actions to avoid duplicate installs in global mode.
+
 ## Responsibilities
 
 - install package manifest to `share/<pkg>/package.xml`
