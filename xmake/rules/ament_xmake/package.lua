@@ -6,6 +6,26 @@ rule("ament_xmake.package")
         end
 
         local pkgname = path.filename(os.projectdir())
+        local include_dir = path.join(installdir, "include")
+        os.mkdir(include_dir)
+        local project_include_dir = path.join(os.projectdir(), "include")
+        if os.isdir(project_include_dir) then
+            os.cp(path.join(project_include_dir, "*"), include_dir)
+        end
+        local kind = target:get("kind")
+        local targetfile = target:targetfile()
+        if targetfile and os.isfile(targetfile) then
+            if kind == "binary" then
+                local bin_dir = path.join(installdir, "lib", pkgname)
+                os.mkdir(bin_dir)
+                os.cp(targetfile, path.join(bin_dir, path.filename(targetfile)))
+            else
+                local lib_dir = path.join(installdir, "lib")
+                os.mkdir(lib_dir)
+                os.cp(targetfile, path.join(lib_dir, path.filename(targetfile)))
+            end
+        end
+
         local pkgxml = path.join(os.projectdir(), "package.xml")
         os.mkdir(path.join(installdir, "share", pkgname))
         if os.isfile(pkgxml) then
@@ -16,12 +36,31 @@ rule("ament_xmake.package")
         os.mkdir(marker_dir)
         io.writefile(path.join(marker_dir, pkgname), "")
 
-        -- Generate a minimal CMake package config so downstream
-        -- find_package(<pkg> CONFIG) can resolve the package.
+        -- Generate CMake package config from library targets so
+        -- downstream find_package(<pkg> CONFIG) can resolve and link.
+        if kind == "binary" then
+            return
+        end
+
         local cmake_dir = path.join(installdir, "share", pkgname, "cmake")
         os.mkdir(cmake_dir)
         local cfg = path.join(cmake_dir, pkgname .. "Config.cmake")
-        if not os.isfile(cfg) then
-            io.writefile(cfg, "set(" .. pkgname .. "_FOUND TRUE)\n")
-        end
+        local static_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".a")
+        local shared_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".so")
+        local lines = {}
+        table.insert(lines, "set(" .. pkgname .. "_FOUND TRUE)")
+        table.insert(lines, "set(" .. pkgname .. "_INCLUDE_DIR \"" .. include_dir .. "\")")
+        table.insert(lines, "set(_" .. pkgname .. "_lib \"\")")
+        table.insert(lines, "if(EXISTS \"" .. shared_lib .. "\")")
+        table.insert(lines, "  set(_" .. pkgname .. "_lib \"" .. shared_lib .. "\")")
+        table.insert(lines, "elseif(EXISTS \"" .. static_lib .. "\")")
+        table.insert(lines, "  set(_" .. pkgname .. "_lib \"" .. static_lib .. "\")")
+        table.insert(lines, "endif()")
+        table.insert(lines, "if(NOT TARGET " .. pkgname .. "::" .. pkgname .. " AND _" .. pkgname .. "_lib)")
+        table.insert(lines, "  add_library(" .. pkgname .. "::" .. pkgname .. " UNKNOWN IMPORTED)")
+        table.insert(lines, "  set_target_properties(" .. pkgname .. "::" .. pkgname .. " PROPERTIES")
+        table.insert(lines, "    IMPORTED_LOCATION \"${_" .. pkgname .. "_lib}\"")
+        table.insert(lines, "    INTERFACE_INCLUDE_DIRECTORIES \"" .. include_dir .. "\")")
+        table.insert(lines, "endif()")
+        io.writefile(cfg, table.concat(lines, "\n") .. "\n")
     end)
