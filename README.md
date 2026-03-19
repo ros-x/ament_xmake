@@ -19,3 +19,8 @@ The rule is expected to ensure ROS package install conventions:
 
 - For deterministic config export, the primary library target should be named the same as the package.
 - In `--symlink-install` mode the plugin sets `AMENT_XMAKE_SYMLINK_INSTALL=1` so install steps prefer symlinks on Linux.
+
+## Docs
+
+- `docs/RULE_SPEC.md`
+- `docs/SYMLINK_INSTALL.md`
