@@ -17,6 +17,7 @@ Implementation uses idempotent package-level actions to avoid duplicate installs
 - install artifacts to ROS-style directories
 - generate `share/<pkg>/cmake/<pkg>Config.cmake`
 - export imported target `<pkg>::<pkg>` for package primary library target
+- expose `add_ros_deps(...)` helper to resolve ROS package include/link flags
 
 ## Rule discovery
 
@@ -26,6 +27,26 @@ Preferred path:
 
 Fallback path:
 - scan `AMENT_PREFIX_PATH` for `share/ament_xmake/xmake/rules/ament_xmake/package.lua`.
+
+## `add_ros_deps(...)`
+
+Usage:
+
+```lua
+target("my_node")
+    set_kind("binary")
+    add_files("src/my_node.cpp")
+    add_ros_deps("rclcpp", "geometry_msgs")
+```
+
+Behavior:
+- resolves package metadata through CMake export configs (`find_package(... CONFIG)`)
+- recursively expands imported CMake targets into include dirs + linker flags
+- caches resolved manifest under `.xmake/ament_xmake/rosdeps/`
+- supports optional options table as last argument:
+  - `cache = false` to disable cache
+  - `visibility = "public"` to export includes/defines
+  - `toolchain_guard = "warn" | "error" | "off"` (default `warn`)
 
 ## Deterministic export rule
 

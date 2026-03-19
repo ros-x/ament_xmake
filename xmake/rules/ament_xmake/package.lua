@@ -1,3 +1,216 @@
+local function _table_unpack(values)
+    if table.unpack then
+        return table.unpack(values)
+    end
+    return unpack(values)
+end
+
+local function _append_unique(out, values)
+    if not values then
+        return
+    end
+    for _, value in ipairs(values) do
+        local seen = false
+        for _, existing in ipairs(out) do
+            if existing == value then
+                seen = true
+                break
+            end
+        end
+        if not seen and value and value ~= "" then
+            table.insert(out, value)
+        end
+    end
+end
+
+local function _normalize_ros_dep_args(...)
+    local args = {...}
+    local opts = {}
+    if #args == 0 then
+        print("error: add_ros_deps() expects at least one package")
+        return {}, {}
+    end
+    if type(args[#args]) == "table" and #args > 1 then
+        opts = args[#args]
+        table.remove(args, #args)
+    end
+    local packages = {}
+    if #args == 1 and type(args[1]) == "table" then
+        packages = args[1]
+    else
+        packages = args
+    end
+    local normalized = {}
+    for _, pkg in ipairs(packages) do
+        if type(pkg) ~= "string" or pkg == "" then
+            print("error: add_ros_deps(): package names must be non-empty strings")
+            return {}, {}
+        end
+        local seen = false
+        for _, existing in ipairs(normalized) do
+            if existing == pkg then
+                seen = true
+                break
+            end
+        end
+        if not seen then
+            table.insert(normalized, pkg)
+        end
+    end
+    return normalized, opts
+end
+
+local function _toolchain_guard(mode)
+    if mode == "off" then
+        return
+    end
+    local cc = get_config("cc") or ""
+    local cxx = get_config("cxx") or ""
+    local suspect = string.find(cc, "xlings", 1, true) or string.find(cxx, "xlings", 1, true)
+    if not suspect then
+        return
+    end
+    local msg = "add_ros_deps(): detected xlings toolchain/runtime; consider " ..
+        "set_toolset(\"cc\", \"/usr/bin/gcc\") and set_toolset(\"cxx\", \"/usr/bin/g++\")"
+    if mode == "error" then
+        print("error: " .. msg)
+        return
+    end
+    print("warning: " .. msg)
+end
+
+local function _find_pkg_prefix(pkg)
+    local ament_prefix_path = os.getenv("AMENT_PREFIX_PATH") or ""
+    for _, prefix in ipairs(path.splitenv(ament_prefix_path)) do
+        if os.isfile(path.join(prefix, "share", pkg, "package.xml")) then
+            return prefix
+        end
+    end
+    return nil
+end
+
+local function _resolve_from_index(pkg, visited, acc)
+    if visited[pkg] then
+        return
+    end
+    visited[pkg] = true
+
+    local index = _AMENT_XMAKE_ROS_INDEX or {}
+    local meta = index[pkg]
+    local prefix = _find_pkg_prefix(pkg)
+    if not meta then
+        -- ignore meta/buildtool deps not present in generated runtime index
+        if prefix then
+            local inc_root = path.join(prefix, "include")
+            local inc_pkg = path.join(inc_root, pkg)
+            if os.isdir(inc_root) then
+                _append_unique(acc.include_dirs, {inc_root})
+            end
+            if os.isdir(inc_pkg) then
+                _append_unique(acc.include_dirs, {inc_pkg})
+            end
+            local lib = path.join(prefix, "lib", "lib" .. pkg .. ".so")
+            if os.isfile(lib) then
+                _append_unique(acc.link_flags, {lib})
+                _append_unique(acc.rpath_dirs, {path.directory(lib)})
+            end
+        end
+        return
+    end
+
+    if prefix then
+        local inc_pkg = path.join(prefix, "include", pkg)
+        if os.isdir(inc_pkg) then
+            _append_unique(acc.include_dirs, {inc_pkg})
+        end
+    end
+
+    _append_unique(acc.include_dirs, meta.include_dirs)
+    _append_unique(acc.compile_definitions, meta.compile_definitions)
+    _append_unique(acc.link_flags, meta.link_flags)
+    _append_unique(acc.rpath_dirs, meta.rpath_dirs)
+
+    for _, dep in ipairs(meta.dependencies or {}) do
+        _resolve_from_index(dep, visited, acc)
+    end
+end
+
+function add_ros_deps(...)
+    local packages, opts = _normalize_ros_dep_args(...)
+    if #packages == 0 then
+        return
+    end
+    _toolchain_guard(opts.toolchain_guard or "warn")
+
+    if _AMENT_XMAKE_ROS_INDEX == nil then
+        print("error: add_ros_deps(): ROS index not loaded. Build through colcon-xmake or ensure index prelude is included")
+        return
+    end
+
+    local acc = {
+        include_dirs = {},
+        compile_definitions = {},
+        link_flags = {},
+        rpath_dirs = {},
+    }
+    local ament_prefix_path = os.getenv("AMENT_PREFIX_PATH") or ""
+    for _, prefix in ipairs(path.splitenv(ament_prefix_path)) do
+        local include_root = path.join(prefix, "include")
+        if os.isdir(include_root) then
+            _append_unique(acc.include_dirs, {include_root})
+            _append_unique(acc.include_dirs, os.dirs(path.join(include_root, "*")))
+        end
+    end
+    local visited = {}
+    for _, pkg in ipairs(packages) do
+        _resolve_from_index(pkg, visited, acc)
+    end
+
+    if #acc.include_dirs > 0 then
+        for _, include_dir in ipairs(acc.include_dirs) do
+            if opts.visibility == "public" then
+                add_includedirs(include_dir, {public = true})
+            else
+                add_includedirs(include_dir)
+            end
+        end
+    end
+
+    if #acc.compile_definitions > 0 then
+        for _, define in ipairs(acc.compile_definitions) do
+            if opts.visibility == "public" then
+                add_defines(define, {public = true})
+            else
+                add_defines(define)
+            end
+        end
+    end
+
+    if #acc.link_flags > 0 then
+        for _, flag in ipairs(acc.link_flags) do
+            add_ldflags(flag, {force = true})
+        end
+    end
+    if os.host() == "linux" then
+        add_ldflags("-L/usr/lib/x86_64-linux-gnu", {force = true})
+        add_ldflags("-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu", {force = true})
+        add_rpathdirs("/usr/lib/x86_64-linux-gnu")
+        add_ldflags("-lyaml", {force = true})
+        add_ldflags("-llttng-ust", {force = true})
+        add_ldflags("-llttng-ust-common", {force = true})
+        add_ldflags("-llttng-ust-tracepoint", {force = true})
+        add_ldflags("-lnuma", {force = true})
+        add_ldflags("-lspdlog", {force = true})
+        add_ldflags("-lfmt", {force = true})
+    end
+
+    if #acc.rpath_dirs > 0 then
+        for _, rpath_dir in ipairs(acc.rpath_dirs) do
+            add_rpathdirs(rpath_dir)
+        end
+    end
+end
+
 rule("ament_xmake.package")
     on_install(function (target)
         local function mkdir_p(dir)
@@ -21,7 +234,8 @@ rule("ament_xmake.package")
 
         local installdir = target:installdir()
         if not installdir then
-            raise("installdir is not configured; run xmake f --installdir=<dir>")
+            print("error: installdir is not configured; run xmake f --installdir=<dir>")
+            return
         end
 
         local source_dir = os.getenv("AMENT_XMAKE_SOURCE_DIR") or os.projectdir()

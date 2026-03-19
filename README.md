@@ -6,6 +6,11 @@ ROS 2 rule package for xmake-based packages.
 
 ```lua
 add_rules("ament_xmake.package")
+
+target("my_node")
+    set_kind("binary")
+    add_files("src/my_node.cpp")
+    add_ros_deps("rclcpp", "geometry_msgs")
 ```
 
 The rule is expected to ensure ROS package install conventions:
@@ -14,6 +19,7 @@ The rule is expected to ensure ROS package install conventions:
 - generate minimal `share/<pkg>/cmake/<pkg>Config.cmake` for downstream `find_package(... CONFIG)`
 - install built artifacts to ROS-style layout (e.g. `lib/`, `lib/<pkg>/`)
 - export imported target `<pkg>::<pkg>` when a library artifact exists
+- provide `add_ros_deps(...)` to resolve ROS package include/link flags via CMake export metadata
 
 ## Constraints
 
