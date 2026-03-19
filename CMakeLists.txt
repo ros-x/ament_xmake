@@ -3,6 +3,9 @@ project(ament_xmake)
 
 find_package(ament_cmake REQUIRED)
 
+install(FILES resource/${PROJECT_NAME}
+  DESTINATION share/ament_index/resource_index/packages)
+
 install(DIRECTORY xmake/
   DESTINATION share/${PROJECT_NAME}/xmake)
 
