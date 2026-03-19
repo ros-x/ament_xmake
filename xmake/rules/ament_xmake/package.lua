@@ -191,18 +191,6 @@ function add_ros_deps(...)
             add_ldflags(flag, {force = true})
         end
     end
-    if os.host() == "linux" then
-        add_ldflags("-L/usr/lib/x86_64-linux-gnu", {force = true})
-        add_ldflags("-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu", {force = true})
-        add_rpathdirs("/usr/lib/x86_64-linux-gnu")
-        add_ldflags("-lyaml", {force = true})
-        add_ldflags("-llttng-ust", {force = true})
-        add_ldflags("-llttng-ust-common", {force = true})
-        add_ldflags("-llttng-ust-tracepoint", {force = true})
-        add_ldflags("-lnuma", {force = true})
-        add_ldflags("-lspdlog", {force = true})
-        add_ldflags("-lfmt", {force = true})
-    end
 
     if #acc.rpath_dirs > 0 then
         for _, rpath_dir in ipairs(acc.rpath_dirs) do
