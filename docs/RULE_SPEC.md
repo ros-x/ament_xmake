@@ -13,8 +13,8 @@ Rule name: `ament_xmake.package`
 ## Rule discovery
 
 Preferred path:
-- `colcon-xmake` injects `AMENT_XMAKE_RULE_FILE` into xmake command environment.
-- package `xmake.lua` should load that file first.
+- `colcon-xmake` generates an internal xmake entry file that includes the rule and then includes package `xmake.lua`.
+- package `xmake.lua` can simply call `add_rules("ament_xmake.package")`.
 
 Fallback path:
 - scan `AMENT_PREFIX_PATH` for `share/ament_xmake/xmake/rules/ament_xmake/package.lua`.
