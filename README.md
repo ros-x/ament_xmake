@@ -24,3 +24,4 @@ The rule is expected to ensure ROS package install conventions:
 
 - `docs/RULE_SPEC.md`
 - `docs/SYMLINK_INSTALL.md`
+- `CHANGELOG.md`
