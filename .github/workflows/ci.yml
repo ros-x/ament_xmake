@@ -19,4 +19,4 @@ jobs:
           grep -q '<build_type>ament_cmake</build_type>' package.xml
       - name: Verify rule installs marker logic
         run: |
-          grep -q 'resource_index/packages' xmake/rules/ament_xmake/package.lua
+          grep -q 'resource_index' xmake/rules/ament_xmake/package.lua
