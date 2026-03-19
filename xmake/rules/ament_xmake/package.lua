@@ -1,5 +1,24 @@
 rule("ament_xmake.package")
     on_install(function (target)
+        local function mkdir_p(dir)
+            os.execv("mkdir", {"-p", dir})
+        end
+
+        local function remove_path(path_)
+            os.execv("rm", {"-rf", path_})
+        end
+
+        local function install_file(src, dst)
+            local symlink_install = os.getenv("AMENT_XMAKE_SYMLINK_INSTALL") == "1"
+            mkdir_p(path.directory(dst))
+            if symlink_install and os.host() == "linux" then
+                remove_path(dst)
+                os.execv("ln", {"-sfn", src, dst})
+            else
+                os.cp(src, dst)
+            end
+        end
+
         local installdir = target:installdir()
         if not installdir then
             raise("installdir is not configured; run xmake f --installdir=<dir>")
@@ -7,7 +26,7 @@ rule("ament_xmake.package")
 
         local pkgname = path.filename(os.projectdir())
         local include_dir = path.join(installdir, "include")
-        os.mkdir(include_dir)
+        mkdir_p(include_dir)
         local project_include_dir = path.join(os.projectdir(), "include")
         if os.isdir(project_include_dir) then
             os.cp(path.join(project_include_dir, "*"), include_dir)
@@ -16,34 +35,33 @@ rule("ament_xmake.package")
         local targetfile = target:targetfile()
         if targetfile and os.isfile(targetfile) then
             if kind == "binary" then
-                local bin_dir = path.join(installdir, "lib", pkgname)
-                os.mkdir(bin_dir)
-                os.cp(targetfile, path.join(bin_dir, path.filename(targetfile)))
+                local dst = path.join(installdir, "lib", pkgname, path.filename(targetfile))
+                install_file(targetfile, dst)
             else
-                local lib_dir = path.join(installdir, "lib")
-                os.mkdir(lib_dir)
-                os.cp(targetfile, path.join(lib_dir, path.filename(targetfile)))
+                local dst = path.join(installdir, "lib", path.filename(targetfile))
+                install_file(targetfile, dst)
             end
         end
 
         local pkgxml = path.join(os.projectdir(), "package.xml")
-        os.mkdir(path.join(installdir, "share", pkgname))
+        mkdir_p(path.join(installdir, "share", pkgname))
         if os.isfile(pkgxml) then
-            os.cp(pkgxml, path.join(installdir, "share", pkgname, "package.xml"))
+            install_file(pkgxml, path.join(installdir, "share", pkgname, "package.xml"))
         end
 
         local marker_dir = path.join(installdir, "share", "ament_index", "resource_index", "packages")
-        os.mkdir(marker_dir)
+        mkdir_p(marker_dir)
         io.writefile(path.join(marker_dir, pkgname), "")
 
-        -- Generate CMake package config from library targets so
-        -- downstream find_package(<pkg> CONFIG) can resolve and link.
-        if kind == "binary" then
+        -- Generate CMake package config from the primary package library target
+        -- so downstream find_package(<pkg> CONFIG) can resolve and link
+        -- deterministically for multi-target projects.
+        if kind == "binary" or target:name() ~= pkgname then
             return
         end
 
         local cmake_dir = path.join(installdir, "share", pkgname, "cmake")
-        os.mkdir(cmake_dir)
+        mkdir_p(cmake_dir)
         local cfg = path.join(cmake_dir, pkgname .. "Config.cmake")
         local static_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".a")
         local shared_lib = path.join(installdir, "lib", "lib" .. pkgname .. ".so")

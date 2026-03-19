@@ -14,3 +14,9 @@ jobs:
           test -f package.xml
           test -f CMakeLists.txt
           test -f xmake/rules/ament_xmake/package.lua
+      - name: Verify package.xml build type
+        run: |
+          grep -q '<build_type>ament_cmake</build_type>' package.xml
+      - name: Verify rule installs marker logic
+        run: |
+          grep -q 'resource_index/packages' xmake/rules/ament_xmake/package.lua

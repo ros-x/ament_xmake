@@ -14,3 +14,8 @@ The rule is expected to ensure ROS package install conventions:
 - generate minimal `share/<pkg>/cmake/<pkg>Config.cmake` for downstream `find_package(... CONFIG)`
 - install built artifacts to ROS-style layout (e.g. `lib/`, `lib/<pkg>/`)
 - export imported target `<pkg>::<pkg>` when a library artifact exists
+
+## Constraints
+
+- For deterministic config export, the primary library target should be named the same as the package.
+- In `--symlink-install` mode the plugin sets `AMENT_XMAKE_SYMLINK_INSTALL=1` so install steps prefer symlinks on Linux.
