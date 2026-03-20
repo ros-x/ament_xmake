@@ -1,3 +1,8 @@
+---
+sidebar_position: 2
+title: Symlink Install
+---
+
 # Symlink Install Behavior
 
 When `colcon build --symlink-install` is used, plugin sets:
