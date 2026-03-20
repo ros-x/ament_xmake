@@ -85,7 +85,8 @@ local function _resolve_from_index(pkg, visited, acc)
             end
             local lib = path.join(prefix, "lib", "lib" .. pkg .. ".so")
             if os.isfile(lib) then
-                _append_unique(acc.link_flags, {lib})
+                _append_unique(acc.links, {pkg})
+                _append_unique(acc.link_dirs, {path.directory(lib)})
                 _append_unique(acc.rpath_dirs, {path.directory(lib)})
             end
         end
@@ -105,7 +106,21 @@ local function _resolve_from_index(pkg, visited, acc)
 
     _append_unique(acc.include_dirs, meta.include_dirs)
     _append_unique(acc.compile_definitions, meta.compile_definitions)
-    _append_unique(acc.link_flags, meta.link_flags)
+    for _, flag in ipairs(meta.link_flags or {}) do
+        if flag:match("^/") and (flag:match("%.so") or flag:match("%.a")) then
+            local libname = path.filename(flag):match("^lib(.+)%.so") or path.filename(flag):match("^lib(.+)%.a")
+            if libname then
+                _append_unique(acc.links, {libname})
+                _append_unique(acc.link_dirs, {path.directory(flag)})
+            end
+        elseif flag:match("^%-L") then
+            _append_unique(acc.link_dirs, {flag:sub(3)})
+        elseif flag:match("^%-l") then
+            _append_unique(acc.links, {flag:sub(3)})
+        else
+            _append_unique(acc.raw_ldflags, {flag})
+        end
+    end
     _append_unique(acc.rpath_dirs, meta.rpath_dirs)
 
     for _, dep in ipairs(meta.dependencies or {}) do
@@ -127,7 +142,9 @@ function add_ros_deps(...)
     local acc = {
         include_dirs = {},
         compile_definitions = {},
-        link_flags = {},
+        links = {},
+        link_dirs = {},
+        raw_ldflags = {},
         rpath_dirs = {},
     }
     local ament_prefix_path = os.getenv("AMENT_PREFIX_PATH") or ""
@@ -163,8 +180,18 @@ function add_ros_deps(...)
         end
     end
 
-    if #acc.link_flags > 0 then
-        for _, flag in ipairs(acc.link_flags) do
+    if #acc.link_dirs > 0 then
+        for _, dir in ipairs(acc.link_dirs) do
+            add_linkdirs(dir)
+        end
+    end
+    if #acc.links > 0 then
+        for _, lib in ipairs(acc.links) do
+            add_links(lib)
+        end
+    end
+    if #acc.raw_ldflags > 0 then
+        for _, flag in ipairs(acc.raw_ldflags) do
             add_ldflags(flag, {force = true})
         end
     end
