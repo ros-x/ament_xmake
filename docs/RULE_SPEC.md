@@ -1,3 +1,8 @@
+---
+sidebar_position: 1
+title: Rule Specification
+---
+
 # ament_xmake Rule Spec
 
 Rule name: `ament_xmake.package`
